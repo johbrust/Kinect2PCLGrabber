@@ -10,10 +10,11 @@
 #include <pcl/io/pcd_io.h>
 #include <cmath>
 #include <boost/thread/thread.hpp>
+
 void help(const std::string &path)
 {
 	std::cout << path << " [options]" << std::endl
-		<< "  mode: 'Depth', 'RGBDepth', 'RGBADepth', or 'IRDepth'" << std::endl;
+		<< "  mode: 'Depth', 'DepthFace', 'HDFace' or 'ForestFace'" << std::endl;
 }
 
 int main(int argc, char* argv[])
@@ -40,18 +41,6 @@ int main(int argc, char* argv[])
 		{
 			selStream = mtec::Depth;
 		}
-		else if (param == "RGBDepth")
-		{
-			selStream = mtec::RGBDepth;
-		}
-		else if (param == "RGBADepth")
-		{
-			selStream = mtec::RGBADepth;
-		}
-		//else if (param == "IRDepth")
-		//{
-		//	selStream = mtec::IRDepth;
-		//}
 		else if (param == "DepthFace")
 		{
 			selStream = mtec::DepthFace;
@@ -59,6 +48,10 @@ int main(int argc, char* argv[])
 		else if (param == "HDFace")
 		{
 			selStream = mtec::HDFace;
+		}
+		else if (param == "ForestFace")
+		{
+			selStream = mtec::ForestFace;
 		}
 		else
 		{
@@ -94,7 +87,7 @@ int main(int argc, char* argv[])
 	//visualizer->registerKeyboardCallback(&Receiver::keyboardEvent, *this);
 
 	bool first = true;
-	// Callback Function to be called when Updating Data
+	// Callback Function to be called when Updating Data with Option Default or 'Depth'
 	boost::function<void(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr&)> functionXYZ =
 		// lambda function capturing 'viewer' by reference
 		[&visualizer, &cloudName](const pcl::PointCloud<pcl::PointXYZ>::ConstPtr &cloud){
@@ -104,56 +97,17 @@ int main(int argc, char* argv[])
 		}
 	};
 
-	// Callback Function to be called when Updating Data
-	boost::function<void(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr&)> functionXYZRGB =
-		// lambda function capturing 'viewer' by reference
-		[&visualizer, &cloudName](const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr &cloud){
-		if (!visualizer->wasStopped()){
-			visualizer->updatePointCloud(cloud, cloudName);
-		}
-	};
-
-	// Callback Function to be called when Updating Data
-	boost::function<void(const pcl::PointCloud<pcl::PointXYZRGBA>::ConstPtr&)> functionXYZRGBA =
-		// lambda function capturing 'viewer' by reference
-		[&visualizer, &cloudName](const pcl::PointCloud<pcl::PointXYZRGBA>::ConstPtr &cloud){
-		if (!visualizer->wasStopped()){
-			visualizer->updatePointCloud(cloud, cloudName);
-		}
-	};
-
-	//// Callback Function to be called when Updating Data
-	//boost::function<void(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr&)> functionXYZI =
-	//	// lambda function capturing 'viewer' by reference
-	//	[&visualizer, &cloudName](const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud){
-	//	if (!visualizer->wasStopped()){
-	//		visualizer->updatePointCloud(cloud, cloudName);
-	//	}
-	//};
-
-	bool save = true;
-
-	// Callback Function to be called when Updating Data
+	// Callback Function to be called when Updating Data with Option 'DepthFace' or 'HDFace'
 	boost::function<void(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr&, const pcl::PointCloud < pcl::PointNormal >::Ptr&, const bool)> functionXYZFaceNormal =
 		// lambda function capturing 'viewer' by reference
 		[&visualizer, &cloudName, &faceNormName, &mutexVis](const pcl::PointCloud<pcl::PointXYZ>::ConstPtr &cloud, const pcl::PointCloud < pcl::PointNormal >::Ptr& pfn, const bool faceFound){
 		boost::mutex::scoped_lock lock(mutexVis);
 		if (!visualizer->wasStopped() && faceFound){
 			visualizer->updatePointCloud(cloud, cloudName);
-			//viewer.showCloud(cloud);
-			//visualizer->removePointCloud(faceNormName);
-			//visualizer->addPointCloudNormals<pcl::PointNormal>(pfn, 1, 0.5, faceNormName);
 			visualizer->removeAllShapes();
 			pcl::PointXYZ p1(pfn->at(0).x, pfn->at(0).y, pfn->at(0).z);
 			pcl::PointXYZ p2(p1.x + 2 * (pfn->at(0).normal_x), p1.y + 2 * (pfn->at(0).normal_y), p1.z + 2 * (pfn->at(0).normal_z));
 			visualizer->addArrow(p1, p2, 1.0, 0, 0, faceNormName);
-			//if (save && faceFound)  {
-			//	pcl::PCDWriter writer;
-			//	writer.writeBinary("cloud.pcd", *cloud);
-			//	writer.writeASCII("cloudFaceNorm.pcd", *pfn);
-			//	//save = false;
-			//}
-
 		}
 	};
 
@@ -162,17 +116,9 @@ int main(int argc, char* argv[])
 
 	// Register Callback Function
 	switch (selStream) {
-	case mtec::RGBDepth:
-		grabber->registerCallback(functionXYZRGB);
-		break;
-	case mtec::RGBADepth:
-		grabber->registerCallback(functionXYZRGBA);
-		break;
-		//case mtec::IRDepth:
-		//	grabber->registerCallback(functionXYZI);
-		//	break;
 	case mtec::HDFace:
 	case mtec::DepthFace:
+	case mtec::ForestFace:
 		grabber->registerCallback(functionXYZFaceNormal);
 		break;
 	default:
@@ -189,7 +135,6 @@ int main(int argc, char* argv[])
 				break;
 			}
 			visualizer->spinOnce(20);
-			//boost::this_thread::sleep(boost::posix_time::microseconds(1000000));
 			mutexVis.unlock();
 		}
 	}
@@ -201,4 +146,3 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
-

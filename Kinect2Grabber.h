@@ -12,15 +12,14 @@
 #include <pcl/io/grabber.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include "CRForestEstimator.h"
 
 
 namespace mtec
 {
-	enum Streams { All, Depth, RGBDepth, RGBADepth, IRDepth, DepthFace, HDFace };
+	enum Streams { All, Depth, RGBDepth, RGBADepth, IRDepth, DepthFace, HDFace, ForestFace };
 
 	struct pcl::PointXYZ;
-	struct pcl::PointXYZRGB;
-	struct pcl::PointXYZRGBA;
 	template <typename T> class pcl::PointCloud;
 
 	template<class Interface>
@@ -44,22 +43,13 @@ namespace mtec
 		virtual float getFramesPerSecond() const;
 
 		typedef void (slotKinect2PointXYZ)(const boost::shared_ptr<const pcl::PointCloud<pcl::PointXYZ>>&);
-		typedef void (slotKinect2PointXYZRGB)(const boost::shared_ptr<const pcl::PointCloud<pcl::PointXYZRGB>>&);
-		typedef void (slotKinect2PointXYZRGBA)(const boost::shared_ptr<const pcl::PointCloud<pcl::PointXYZRGBA>>&);
-		typedef void (slotKinect2PointXYZI)(const boost::shared_ptr<const pcl::PointCloud<pcl::PointXYZI>>&);
 		typedef void (slotKinect2PointXYZFaceNormal)(const boost::shared_ptr<const pcl::PointCloud<pcl::PointXYZ>>&, const pcl::PointCloud < pcl::PointNormal >::Ptr&, const bool);
 
 	protected:
 		boost::signals2::signal<slotKinect2PointXYZ>* m_signalPointXYZ;
-		boost::signals2::signal<slotKinect2PointXYZRGB>* m_signalPointXYZRGB;
-		boost::signals2::signal<slotKinect2PointXYZRGBA>* m_signalPointXYZRGBA;
-		boost::signals2::signal<slotKinect2PointXYZI>* m_signalPointXYZI;
 		boost::signals2::signal<slotKinect2PointXYZFaceNormal>* m_signalPointXYZFaceNormal;
 
 		pcl::PointCloud<pcl::PointXYZ>::Ptr convertDepthToPointXYZ(UINT16* depthBuffer);
-		pcl::PointCloud<pcl::PointXYZRGB>::Ptr convertRGBDepthToPointXYZRGB(RGBQUAD* colorBuffer, UINT16* depthBuffer);
-		pcl::PointCloud<pcl::PointXYZRGBA>::Ptr convertRGBADepthToPointXYZRGBA(RGBQUAD* colorBuffer, UINT16* depthBuffer);
-		pcl::PointCloud<pcl::PointXYZI>::Ptr convertIRDepthToPointXYZI(UINT16* infraredBuffer, UINT16* depthBuffer);
 		//pcl::PointNormal getFacePointNormal();
 
 		boost::thread m_thread;
@@ -76,6 +66,13 @@ namespace mtec
 		IKinectSensor* m_sensor;
 		ICoordinateMapper* m_mapper;
 		IMultiSourceFrameReader* m_multiSourceReader;
+
+		// Forest Estimator
+		CRForestEstimator estimator;
+		cv::Mat img3D;
+		std::vector< cv::Vec<float, POSE_SIZE> > g_means; //outputs
+		std::vector< std::vector< Vote > > g_clusters; //full clusters of votes
+		std::vector< Vote > g_votes; //all votes returned by the forest
 
 		// Depth Face
 		IFaceFrameSource*					m_pFaceFrameSources[BODY_COUNT];

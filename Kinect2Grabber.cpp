@@ -1,5 +1,6 @@
 #include "Kinect2Grabber.h"
 #include "Eigen/Core"
+
 namespace mtec {
 	// define the face frame features required to be computed by this application
 	static const DWORD c_FaceFrameFeatures =
@@ -84,9 +85,6 @@ namespace mtec {
 		, m_running(false)
 		, m_quit(false)
 		, m_signalPointXYZ(nullptr)
-		, m_signalPointXYZRGB(nullptr)
-		, m_signalPointXYZRGBA(nullptr)
-		, m_signalPointXYZI(nullptr)
 		, nVertices(0)
 	{
 		m_facePointNormalPtr = pcl::PointCloud<pcl::PointNormal>::Ptr(new pcl::PointCloud<pcl::PointNormal>());
@@ -142,7 +140,7 @@ namespace mtec {
 				}
 
 				// create the HD face frame source
-				if (m_selectedStream == HDFace){
+				if (m_selectedStream == HDFace) {
 					m_result = CreateHighDefinitionFaceFrameSource(m_sensor, &m_pHDFaceFrameSources[i]);
 					if (SUCCEEDED(m_result)) {
 						//open the corresponding reader
@@ -172,6 +170,18 @@ namespace mtec {
 						throw std::exception("Exception: CreateFaceModel()");
 					}
 				}
+
+				// create the forest estimator
+				if (m_selectedStream == ForestFace) {
+					// load configuration and camera intrinsics
+					estimator.loadConfig("config.txt");
+					//load forest
+					if (!estimator.loadForest(estimator.g_treepath.c_str(), estimator.g_ntrees)) {
+						std::cerr << "could not read forest!" << std::endl;
+						exit(-1);
+					}
+					img3D.create(480, 640, CV_32FC3);
+				}
 			}
 		}
 
@@ -186,32 +196,13 @@ namespace mtec {
 
 		m_signalPointXYZ = createSignal<slotKinect2PointXYZ>();
 		switch (m_selectedStream) {
-		case RGBDepth:
-			// To Reserve Color Frame Buffer
-			m_colorBuffer.resize(m_colorWidth * m_colorHeight);
-
-			m_signalPointXYZRGB = createSignal<slotKinect2PointXYZRGB>();
-			break;
-		case RGBADepth:
-			// To Reserve Color Frame Buffer
-			m_colorBuffer.resize(m_colorWidth * m_colorHeight);
-
-			m_signalPointXYZRGBA = createSignal<slotKinect2PointXYZRGBA>();
-			break;
-		case IRDepth:
-			// To Reserve Infrared Frame Buffer
-			m_infraredBuffer.resize(m_infraredWidth * m_infraredHeight);
-
-			m_signalPointXYZI = createSignal<slotKinect2PointXYZI>();
-			break;
 		case DepthFace:
 		case HDFace:
+		case ForestFace:
 			m_signalPointXYZFaceNormal = createSignal<slotKinect2PointXYZFaceNormal>();
 			break;
 		default:
-			m_signalPointXYZRGB = createSignal<slotKinect2PointXYZRGB>();
-			m_signalPointXYZRGBA = createSignal<slotKinect2PointXYZRGBA>();
-			m_signalPointXYZI = createSignal<slotKinect2PointXYZI>();
+			m_signalPointXYZ = createSignal<slotKinect2PointXYZ>();
 		}
 	}
 
@@ -220,9 +211,6 @@ namespace mtec {
 		stop();
 
 		disconnect_all_slots<slotKinect2PointXYZ>();
-		disconnect_all_slots<slotKinect2PointXYZRGB>();
-		disconnect_all_slots<slotKinect2PointXYZRGBA>();
-		disconnect_all_slots<slotKinect2PointXYZI>();
 		disconnect_all_slots<slotKinect2PointXYZFaceNormal>();
 
 		// done with face sources and readers
@@ -251,19 +239,9 @@ namespace mtec {
 		// Open IMultiSourceFrameReader
 		switch (m_selectedStream) {
 		case Depth:
+		case ForestFace:
 			m_result = m_sensor->OpenMultiSourceFrameReader(
 				FrameSourceTypes::FrameSourceTypes_Depth,
-				&m_multiSourceReader);
-			break;
-		case RGBDepth:
-		case RGBADepth:
-			m_result = m_sensor->OpenMultiSourceFrameReader(
-				FrameSourceTypes::FrameSourceTypes_Depth | FrameSourceTypes::FrameSourceTypes_Color,
-				&m_multiSourceReader);
-			break;
-		case IRDepth:
-			m_result = m_sensor->OpenMultiSourceFrameReader(
-				FrameSourceTypes::FrameSourceTypes_Depth | FrameSourceTypes::FrameSourceTypes_Infrared,
 				&m_multiSourceReader);
 			break;
 		case DepthFace:
@@ -314,8 +292,7 @@ namespace mtec {
 		return 30.0f;
 	}
 
-	void Kinect2Grabber::threadFunction()
-	{
+	void Kinect2Grabber::threadFunction() {
 		while (!m_quit){
 			IMultiSourceFrame* multiSourceFrame = nullptr;
 			IColorFrame* colorFrame = nullptr;
@@ -340,42 +317,6 @@ namespace mtec {
 					}
 				}
 				SafeRelease(depthFrameReference);
-			}
-
-			if (m_selectedStream == RGBDepth || m_selectedStream == RGBADepth) {
-				if (SUCCEEDED(m_result)) {
-					IColorFrameReference* colorFrameReference = NULL;
-					m_result = multiSourceFrame->get_ColorFrameReference(&colorFrameReference);
-					if (SUCCEEDED(m_result)) {
-						m_result = colorFrameReference->AcquireFrame(&colorFrame);
-						if (SUCCEEDED(m_result)){
-							// Retrieved Color Data
-							m_result = colorFrame->CopyConvertedFrameDataToArray(m_colorBuffer.size() * sizeof(RGBQUAD), reinterpret_cast<BYTE*>(&m_colorBuffer[0]), ColorImageFormat::ColorImageFormat_Bgra);
-							if (FAILED(m_result)){
-								throw std::exception("Exception : IColorFrame::CopyConvertedFrameDataToArray()");
-							}
-						}
-					}
-					SafeRelease(colorFrameReference);
-				}
-			}
-
-			if (m_selectedStream == IRDepth) {
-				if (SUCCEEDED(m_result)) {
-					IInfraredFrameReference* infraredFrameReference = NULL;
-					m_result = multiSourceFrame->get_InfraredFrameReference(&infraredFrameReference);
-					if (SUCCEEDED(m_result)) {
-						m_result = infraredFrameReference->AcquireFrame(&infraredFrame);
-						if (SUCCEEDED(m_result)){
-							// Retrieved Infrared Data
-							m_result = infraredFrame->CopyFrameDataToArray(m_infraredBuffer.size(), &m_infraredBuffer[0]);
-							if (FAILED(m_result)){
-								throw std::exception("Exception : IInfraredFrame::CopyFrameDataToArray()");
-							}
-						}
-					}
-					SafeRelease(infraredFrameReference);
-				}
 			}
 
 			if (m_selectedStream == DepthFace || m_selectedStream == HDFace) {
@@ -429,7 +370,7 @@ namespace mtec {
 
 						// Face Frame
 						//std::system("cls");
-						if (m_selectedStream == DepthFace){
+						if (m_selectedStream == DepthFace) {
 							for (int count = 0; count < BODY_COUNT; count++){
 								IFaceFrame* pFaceFrame = nullptr;
 								m_result = m_pFaceFrameReaders[count]->AcquireLatestFrame(&pFaceFrame);
@@ -482,7 +423,7 @@ namespace mtec {
 						}
 
 						//HD Face Frame
-						if (m_selectedStream == HDFace){
+						if (m_selectedStream == HDFace) {
 							for (int count = 0; count < BODY_COUNT; count++){
 								IHighDefinitionFaceFrame* pHDFaceFrame = nullptr;
 								m_result = m_pHDFaceFrameReaders[count]->AcquireLatestFrame(&pHDFaceFrame);
@@ -588,6 +529,64 @@ namespace mtec {
 				}
 			}
 
+			if (m_selectedStream == ForestFace) {
+				// head pose estimation with DRRFs, see Fanelli et al. (2011)
+				// 1. get the point cloud from depth data
+				for (int y = 0; y < img3D.rows; y++) {
+					cv::Vec3f* img3Di = img3D.ptr<cv::Vec3f>(y);
+					for (int x = 0; x < img3D.cols; x++) {
+						if ((y > 26 || y < 451) && (x > 62 || x < 575)) {
+							UINT16 depth = m_depthBuffer[(y - 27) * m_depthWidth + (x - 63)];
+							if (depth < estimator.g_max_z && depth > 0) {
+								DepthSpacePoint depthSpacePoint = { static_cast<float>(x - 63), static_cast<float>(y - 27) };
+								CameraSpacePoint cameraSpacePoint = { 0.0f, 0.0f, 0.0f };
+								m_mapper->MapDepthPointToCameraSpace(depthSpacePoint, depth, &cameraSpacePoint);
+								img3Di[x][0] = cameraSpacePoint.X;
+								img3Di[x][1] = cameraSpacePoint.Y;
+								img3Di[x][2] = cameraSpacePoint.Z;
+							}
+							else {
+								img3Di[x] = 0;
+							}
+						}
+						else {
+							img3Di[x] = 0;
+						}
+					}
+				}
+
+				// 2. estimate the head pose
+				g_means.clear();
+				g_votes.clear();
+				g_clusters.clear();
+				estimator.estimate(	img3D,
+									g_means,
+									g_clusters,
+									g_votes,
+									estimator.g_stride,
+									estimator.g_maxv,
+									estimator.g_prob_th,
+									estimator.g_larger_radius_ratio,
+									estimator.g_smaller_radius_ratio,
+									false,
+									estimator.g_th
+								);
+
+				// 3. get pose information
+				if (g_means.size() > 0) {
+					m_faceFound = true;
+					Eigen::Affine3f T_est = estimator.GetTransformation(g_means[0][0], g_means[0][1], g_means[0][2], g_means[0][3], g_means[0][4], g_means[0][5]);
+					m_facePointNormalPtr->at(0).x = T_est(0, 2);
+					m_facePointNormalPtr->at(0).y = T_est(1, 2);
+					m_facePointNormalPtr->at(0).z = T_est(2, 2);
+					// get normal (-z direction)
+					Eigen::Vector4f faceDir_est(0.0, 0.0, -100.0, 1.0);
+					faceDir_est = T_est * faceDir_est;
+					m_facePointNormalPtr->at(0).normal_x = faceDir_est(0, 0);
+					m_facePointNormalPtr->at(0).normal_y = faceDir_est(1, 0);
+					m_facePointNormalPtr->at(0).normal_z = faceDir_est(2, 0);
+				}
+			}
 
 			SafeRelease(colorFrame);
 			SafeRelease(depthFrame);
@@ -599,24 +598,18 @@ namespace mtec {
 				m_signalPointXYZ->operator()(convertDepthToPointXYZ(&m_depthBuffer[0]));
 			}
 
-			if (m_selectedStream == RGBDepth) {
-				m_signalPointXYZRGB->operator()(convertRGBDepthToPointXYZRGB(&m_colorBuffer[0], &m_depthBuffer[0]));
-			}
-
-			if (m_selectedStream == RGBADepth) {
-				m_signalPointXYZRGBA->operator()(convertRGBADepthToPointXYZRGBA(&m_colorBuffer[0], &m_depthBuffer[0]));
-			}
-
-			if (m_selectedStream == IRDepth) {
-				m_signalPointXYZI->operator()(convertIRDepthToPointXYZI(&m_infraredBuffer[0], &m_depthBuffer[0]));
+			if (m_selectedStream == ForestFace) {
+				m_signalPointXYZFaceNormal->operator()(convertDepthToPointXYZ(&m_depthBuffer[0]), m_facePointNormalPtr, m_faceFound);
 			}
 
 			if (m_selectedStream == DepthFace) {
 				m_signalPointXYZFaceNormal->operator()(convertDepthToPointXYZ(&m_depthBuffer[0]), m_facePointNormalPtr, m_faceFound);
 			}
+
 			if (m_selectedStream == HDFace) {
 				m_signalPointXYZFaceNormal->operator()(convertDepthToPointXYZ(&m_depthBuffer[0]), m_HDFacePointNormalPtr, m_HDFaceFound);
 			}
+
 			m_faceFound = false;
 			m_HDFaceFound = false;
 		}
@@ -639,133 +632,6 @@ namespace mtec {
 
 				DepthSpacePoint depthSpacePoint = { static_cast<float>(x), static_cast<float>(y) };
 				UINT16 depth = depthBuffer[y * m_depthWidth + x];
-
-				// Coordinate Mapping Depth to Camera Space, and Setting PointCloud XYZ
-				CameraSpacePoint cameraSpacePoint = { 0.0f, 0.0f, 0.0f };
-				m_mapper->MapDepthPointToCameraSpace(depthSpacePoint, depth, &cameraSpacePoint);
-				point.x = cameraSpacePoint.X;
-				point.y = cameraSpacePoint.Y;
-				point.z = cameraSpacePoint.Z;
-
-				*pt = point;
-			}
-		}
-
-		return cloud;
-	}
-
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr Kinect2Grabber::convertRGBDepthToPointXYZRGB(RGBQUAD* colorBuffer, UINT16* depthBuffer)
-	{
-		pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>());
-
-		cloud->width = static_cast<uint32_t>(m_depthWidth);
-		cloud->height = static_cast<uint32_t>(m_depthHeight);
-		cloud->is_dense = false;
-
-		cloud->points.resize(cloud->height * cloud->width);
-
-		pcl::PointXYZRGB* pt = &cloud->points[0];
-		for (int y = 0; y < m_depthHeight; y++){
-			for (int x = 0; x < m_depthWidth; x++, pt++){
-				pcl::PointXYZRGB point;
-
-				DepthSpacePoint depthSpacePoint = { static_cast<float>(x), static_cast<float>(y) };
-				UINT16 depth = depthBuffer[y * m_depthWidth + x];
-
-				// Coordinate Mapping Depth to Color Space, and Setting PointCloud RGB
-				ColorSpacePoint colorSpacePoint = { 0.0f, 0.0f };
-				m_mapper->MapDepthPointToColorSpace(depthSpacePoint, depth, &colorSpacePoint);
-				int colorX = static_cast<int>(std::floor(colorSpacePoint.X + 0.5f));
-				int colorY = static_cast<int>(std::floor(colorSpacePoint.Y + 0.5f));
-				if ((0 <= colorX) && (colorX < m_colorWidth) && (0 <= colorY) && (colorY < m_colorHeight)){
-					RGBQUAD color = colorBuffer[colorY * m_colorWidth + colorX];
-					point.b = color.rgbBlue;
-					point.g = color.rgbGreen;
-					point.r = color.rgbRed;
-				}
-
-				// Coordinate Mapping Depth to Camera Space, and Setting PointCloud XYZ
-				CameraSpacePoint cameraSpacePoint = { 0.0f, 0.0f, 0.0f };
-				m_mapper->MapDepthPointToCameraSpace(depthSpacePoint, depth, &cameraSpacePoint);
-				if ((0 <= colorX) && (colorX < m_colorWidth) && (0 <= colorY) && (colorY < m_colorHeight)){
-					point.x = cameraSpacePoint.X;
-					point.y = cameraSpacePoint.Y;
-					point.z = cameraSpacePoint.Z;
-				}
-
-				*pt = point;
-			}
-		}
-
-		return cloud;
-	}
-
-	pcl::PointCloud<pcl::PointXYZRGBA>::Ptr Kinect2Grabber::convertRGBADepthToPointXYZRGBA(RGBQUAD* colorBuffer, UINT16* depthBuffer)
-	{
-		pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGBA>());
-
-		cloud->width = static_cast<uint32_t>(m_depthWidth);
-		cloud->height = static_cast<uint32_t>(m_depthHeight);
-		cloud->is_dense = false;
-
-		cloud->points.resize(cloud->height * cloud->width);
-
-		pcl::PointXYZRGBA* pt = &cloud->points[0];
-		for (int y = 0; y < m_depthHeight; y++){
-			for (int x = 0; x < m_depthWidth; x++, pt++){
-				pcl::PointXYZRGBA point;
-
-				DepthSpacePoint depthSpacePoint = { static_cast<float>(x), static_cast<float>(y) };
-				UINT16 depth = depthBuffer[y * m_depthWidth + x];
-
-				// Coordinate Mapping Depth to Color Space, and Setting PointCloud RGBA
-				ColorSpacePoint colorSpacePoint = { 0.0f, 0.0f };
-				m_mapper->MapDepthPointToColorSpace(depthSpacePoint, depth, &colorSpacePoint);
-				int colorX = static_cast<int>(std::floor(colorSpacePoint.X + 0.5f));
-				int colorY = static_cast<int>(std::floor(colorSpacePoint.Y + 0.5f));
-				if ((0 <= colorX) && (colorX < m_colorWidth) && (0 <= colorY) && (colorY < m_colorHeight)){
-					RGBQUAD color = colorBuffer[colorY * m_colorWidth + colorX];
-					point.b = color.rgbBlue;
-					point.g = color.rgbGreen;
-					point.r = color.rgbRed;
-					point.a = color.rgbReserved;
-				}
-
-				// Coordinate Mapping Depth to Camera Space, and Setting PointCloud XYZ
-				CameraSpacePoint cameraSpacePoint = { 0.0f, 0.0f, 0.0f };
-				m_mapper->MapDepthPointToCameraSpace(depthSpacePoint, depth, &cameraSpacePoint);
-				if ((0 <= colorX) && (colorX < m_colorWidth) && (0 <= colorY) && (colorY < m_colorHeight)){
-					point.x = cameraSpacePoint.X;
-					point.y = cameraSpacePoint.Y;
-					point.z = cameraSpacePoint.Z;
-				}
-
-				*pt = point;
-			}
-		}
-
-		return cloud;
-	}
-
-	pcl::PointCloud<pcl::PointXYZI>::Ptr Kinect2Grabber::convertIRDepthToPointXYZI(UINT16* infraredBuffer, UINT16* depthBuffer)
-	{
-		pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>());
-
-		cloud->width = static_cast<uint32_t>(m_depthWidth);
-		cloud->height = static_cast<uint32_t>(m_depthHeight);
-		cloud->is_dense = false;
-
-		cloud->points.resize(cloud->height * cloud->width);
-
-		pcl::PointXYZI* pt = &cloud->points[0];
-		for (int y = 0; y < m_depthHeight; y++){
-			for (int x = 0; x < m_depthWidth; x++, pt++){
-				pcl::PointXYZI point;
-
-				DepthSpacePoint depthSpacePoint = { static_cast<float>(x), static_cast<float>(y) };
-				UINT16 depth = depthBuffer[y * m_depthWidth + x];
-				UINT16 infrared = infraredBuffer[y * m_depthWidth + x];
-				point.intensity = infrared;
 
 				// Coordinate Mapping Depth to Camera Space, and Setting PointCloud XYZ
 				CameraSpacePoint cameraSpacePoint = { 0.0f, 0.0f, 0.0f };
